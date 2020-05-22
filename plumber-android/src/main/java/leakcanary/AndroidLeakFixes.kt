@@ -11,7 +11,10 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
 import android.os.UserManager
+import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import shark.SharkLog
 import java.lang.reflect.Array
@@ -27,6 +30,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 /**
  * A collection of hacks to fix leaks in the Android Framework and other Google Android libraries.
  */
+@SuppressLint("NewApi")
 enum class AndroidLeakFixes {
 
   /**
@@ -329,9 +333,9 @@ enum class AndroidLeakFixes {
         val contextField: Field
         try {
           contextField = application
-            .getSystemService(Context.ACTIVITY_SERVICE)
-            .javaClass
-            .getDeclaredField("mContext")
+              .getSystemService(Context.ACTIVITY_SERVICE)
+              .javaClass
+              .getDeclaredField("mContext")
           contextField.isAccessible = true
           if ((contextField.modifiers or Modifier.STATIC) != contextField.modifiers) {
             return@execute
@@ -352,6 +356,26 @@ enum class AndroidLeakFixes {
       }
     }
   },
+
+  VIEW_LOCATION_HOLDER {
+    override fun apply(application: Application) {
+      if (SDK_INT != 28) {
+        return
+      }
+      val viewGroup = FrameLayout(application)
+      // ViewLocationHolder.MAX_POOL_SIZE = 32
+      for (i in 0 until 32) {
+        val childView = View(application)
+        viewGroup.addView(childView)
+      }
+      val outChildren = ArrayList<View>().apply {
+        add(viewGroup.getChildAt(0))
+      }
+      application.onActivityDestroyed {
+        viewGroup.addChildrenForAccessibility(outChildren)
+      }
+    }
+  }
 
   ;
 
