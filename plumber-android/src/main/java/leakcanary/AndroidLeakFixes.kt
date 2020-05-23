@@ -11,10 +11,7 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
 import android.os.UserManager
-import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.TextView
 import shark.SharkLog
 import java.lang.reflect.Array
@@ -357,26 +354,26 @@ enum class AndroidLeakFixes {
     }
   },
 
+  /**
+   * In Android P, ViewLocationHolder has an mRoot field that is not cleared in its clear() method.
+   * Introduced in https://github.com/aosp-mirror/platform_frameworks_base/commit
+   * /86b326012813f09d8f1de7d6d26c986a909d
+   *
+   * This leaks triggers very often when accessibility is on. To fix this leak we need to clear
+   * the ViewGroup.ViewLocationHolder.sPool pool. Unfortunately Android P prevents accessing that
+   * field through reflection. So instead, we call [ViewGroup#addChildrenForAccessibility] with
+   * a view group that has 32 children (32 being the pool size), which as result fills in the pool
+   * with 32 dumb views that reference a dummy context instead of an activity context.
+   *
+   * This fix empties the pool on every activity destroy and every AndroidX fragment view destroy.
+   * You can support other cases where views get detached by calling directly
+   * [ViewLocationHolderLeakFix.clearStaticPool].
+   */
   VIEW_LOCATION_HOLDER {
     override fun apply(application: Application) {
-      if (SDK_INT != 28) {
-        return
-      }
-      val viewGroup = FrameLayout(application)
-      // ViewLocationHolder.MAX_POOL_SIZE = 32
-      for (i in 0 until 32) {
-        val childView = View(application)
-        viewGroup.addView(childView)
-      }
-      val outChildren = ArrayList<View>().apply {
-        add(viewGroup.getChildAt(0))
-      }
-      application.onActivityDestroyed {
-        viewGroup.addChildrenForAccessibility(outChildren)
-      }
+      ViewLocationHolderLeakFix.applyFix(application)
     }
   }
-
   ;
 
   protected abstract fun apply(application: Application)
@@ -390,6 +387,7 @@ enum class AndroidLeakFixes {
       application: Application,
       fixes: Set<AndroidLeakFixes> = EnumSet.allOf(AndroidLeakFixes::class.java)
     ) {
+      checkMainThread()
       fixes.forEach { it.apply(application) }
     }
 
@@ -445,7 +443,7 @@ enum class AndroidLeakFixes {
       })
     }
 
-    private inline fun <reified T : Any> noOpDelegate(): T {
+    internal inline fun <reified T : Any> noOpDelegate(): T {
       val javaClass = T::class.java
       val noOpHandler = InvocationHandler { _, _, _ ->
         // no op
@@ -453,6 +451,14 @@ enum class AndroidLeakFixes {
       return Proxy.newProxyInstance(
           javaClass.classLoader, arrayOf(javaClass), noOpHandler
       ) as T
+    }
+
+    internal fun checkMainThread() {
+      if (Looper.getMainLooper().thread !== Thread.currentThread()) {
+        throw UnsupportedOperationException(
+            "Should be called from the main thread, not ${Thread.currentThread()}"
+        )
+      }
     }
 
   }
